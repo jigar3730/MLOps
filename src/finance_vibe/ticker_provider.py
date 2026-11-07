@@ -12,13 +12,37 @@ MANIFEST_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'ticker_manifest.csv')
 
 
+_HEADER_NAMES = {"SYMBOL", "TICKER"}
+
+
 def _normalize_symbols(symbols) -> list[str]:
-    """Uppercase, strip, drop blank / index / dotted symbols."""
-    return [
-        t.upper().strip()
-        for t in symbols
-        if t and "^" not in str(t) and "." not in str(t)
-    ]
+    """Uppercase, strip, drop blanks / indices; map share-class dots to Yahoo dashes.
+
+    ``BRK.B`` -> ``BRK-B`` (Yahoo's convention) instead of silently dropping it.
+    Order is preserved and duplicates removed.
+    """
+    out = []
+    for t in symbols:
+        if t is None or (isinstance(t, float) and pd.isna(t)):
+            continue
+        s = str(t).upper().strip().replace(".", "-")
+        if not s or "^" in s:
+            continue
+        out.append(s)
+    return list(dict.fromkeys(out))
+
+
+def load_manifest(path: str = None) -> list[str]:
+    """Read the ticker manifest, with or without a header row.
+
+    The shipped manifest has no header; reading it with pandas' default
+    ``header=0`` silently turned the first ticker into the column name.
+    """
+    path = path or MANIFEST_PATH
+    raw = pd.read_csv(path, header=None, usecols=[0], dtype=str, skip_blank_lines=True)
+    values = raw.iloc[:, 0].dropna().astype(str).str.strip()
+    values = values[~values.str.upper().isin(_HEADER_NAMES)]
+    return _normalize_symbols(values.tolist())
 
 
 def refresh_active_tickers():
@@ -31,17 +55,15 @@ def refresh_active_tickers():
     static_tickers = []
     if os.path.exists(MANIFEST_PATH):
         try:
-            manifest_df = pd.read_csv(MANIFEST_PATH)
-            col_name = 'Symbol' if 'Symbol' in manifest_df.columns else manifest_df.columns[0]
-            static_tickers = manifest_df[col_name].dropna().unique().tolist()
+            static_tickers = load_manifest(MANIFEST_PATH)
             print(f"📦 Loaded {len(static_tickers)} static tickers from manifest.")
-        except Exception as e:
+        except (OSError, ValueError, pd.errors.ParserError) as e:
             print(f"⚠️ Could not read manifest: {e}")
     else:
         print(f"⚠️ Manifest not found at {MANIFEST_PATH}")
 
-    # 2. Add Static Tickers from config.py (priority baseline)
-    static_tickers = _normalize_symbols(set(static_tickers + config.STATIC_TICKERS))
+    # 2. Add Static Tickers from config.py (priority baseline, manifest order kept)
+    static_tickers = _normalize_symbols(static_tickers + config.STATIC_TICKERS)
     print(f"📌 Priority baseline (manifest + STATIC_TICKERS): {len(static_tickers)}")
 
     # 3. Discover Active Tickers via Screener

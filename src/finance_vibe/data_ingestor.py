@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import sys
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # --- 1. PACKAGE IMPORT (Upgraded for Multi-Environment Paths) ---
 try:
@@ -18,6 +19,63 @@ except ImportError:
         if repo_root not in sys.path:
             sys.path.append(repo_root)
         from src.finance_vibe import config
+
+
+MARKET_TZ = ZoneInfo("America/New_York")
+# A weekly bar is complete once the Friday regular session has closed.
+WEEK_CLOSE_OFFSET = pd.Timedelta(days=4, hours=16)
+
+
+def _naive_index(df: pd.DataFrame) -> pd.DataFrame:
+    """Return *df* with a tz-naive DatetimeIndex (Yahoo may return tz-aware stamps)."""
+    out = df.copy()
+    out.index = pd.to_datetime(out.index)
+    if out.index.tz is not None:
+        out.index = out.index.tz_localize(None)
+    return out
+
+
+def week_start(ts) -> pd.Timestamp:
+    """Monday 00:00 of the calendar week containing *ts*."""
+    ts = pd.Timestamp(ts).normalize()
+    return ts - pd.Timedelta(days=ts.day_of_week)
+
+
+def is_monday_anchored(index) -> bool:
+    """True when every weekly bar is labelled on a Monday (Yahoo's normal convention)."""
+    idx = pd.DatetimeIndex(index)
+    return len(idx) == 0 or bool((idx.day_of_week == 0).all())
+
+
+def drop_incomplete_weekly_bar(df: pd.DataFrame, now=None) -> pd.DataFrame:
+    """Drop the last weekly bar only while its week is still trading.
+
+    Yahoo labels weekly bars by the Monday the week starts, so the label's
+    weekday says nothing about completeness. The bar is complete once the
+    Friday close (16:00 America/New_York) of that week has passed.
+    """
+    if df.empty:
+        return df
+    if now is None:
+        now = datetime.now(MARKET_TZ)
+    now = pd.Timestamp(now)
+    if now.tzinfo is not None:
+        now = now.tz_convert(MARKET_TZ).tz_localize(None)
+    week_close = week_start(df.index[-1]) + WEEK_CLOSE_OFFSET
+    if now < week_close:
+        return df.iloc[:-1]
+    return df
+
+
+def resample_daily_to_weekly(daily: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate daily OHLCV into Monday-labelled weekly bars (Mon–Fri)."""
+    daily = _naive_index(daily).sort_index()
+    keys = daily.index.map(week_start)
+    weekly = daily.groupby(keys).agg(
+        {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+    )
+    weekly.index.name = "Date"
+    return weekly
 
 
 def _log_ingest_error(logs_dir: str, ticker: str, message: str) -> None:
@@ -79,12 +137,22 @@ def ingest_market_data(mode="weekly"):
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
 
-            # --- 4. DATA CLEANING ---
-            # Remove the last row if it's an incomplete weekly candle (only for 1wk)
-            if INTERVAL == "1wk" and len(df) > 0:
-                last_date = df.index[-1]
-                if hasattr(last_date, "weekday") and last_date.weekday() != 4:
-                    df = df.iloc[:-1]
+            # --- 4. DATA CLEANING (weekly only) ---
+            if INTERVAL == "1wk":
+                df = _naive_index(df)
+                # Some symbols come back on a non-Monday weekly calendar (e.g. bars
+                # labelled Tuesday), which never aligns with the QQQ benchmark.
+                # Rebuild those from daily bars on the standard Monday calendar.
+                if not is_monday_anchored(df.index):
+                    daily = yf.download(ticker, period=PERIOD, interval="1d",
+                                        progress=False, auto_adjust=True)
+                    if isinstance(daily.columns, pd.MultiIndex):
+                        daily.columns = daily.columns.get_level_values(0)
+                    if not daily.empty:
+                        print("(rebuilt Monday weekly bars from daily)", end=" ")
+                        df = resample_daily_to_weekly(daily)
+                # Drop the last bar only if its week has not closed yet.
+                df = drop_incomplete_weekly_bar(df)
 
             # --- 4b. VALIDATE OHLCV CONTRACT (reject, never save partial) ---
             clean = config.validate_and_clean_ohlcv(df, require_volume=True)

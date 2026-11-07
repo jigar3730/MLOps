@@ -1,0 +1,17 @@
+# Keep the build context small and free of local state.
+# data/ is mounted as a volume at runtime, never baked into the image.
+.git
+.gitignore
+.devcontainer
+.vscode
+data/
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ipynb_checkpoints
+*.log
+*.docx
+docker-compose*.yml
+Dockerfile
+.dockerignore
+.env

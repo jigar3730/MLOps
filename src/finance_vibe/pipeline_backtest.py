@@ -271,24 +271,28 @@ def simulate_scaled_trade(
         date = bar["Date"] if "Date" in df.columns else k
         bars_held = k - fill_idx + 1
 
+        # The trailing stop for this bar is set from the high/low water mark of
+        # PRIOR bars only. Ratcheting with this bar's extreme and then testing
+        # this bar's opposite extreme would assume the favourable print came
+        # first (intrabar look-ahead).
         if is_long:
             mfe_r = max(mfe_r, (hi - fill_price) / risk)
             mae_r = min(mae_r, (lo - fill_price) / risk)
-            highest_high = max(highest_high, hi)
 
             # Dynamic high-water mark trailing stop (1.5x - 2.0x ATR/Risk)
             if trailing_atr_mult is not None and trailing_atr_mult > 0:
                 trail_stop_lvl = highest_high - (trailing_atr_mult * risk)
                 current_stop = max(current_stop, trail_stop_lvl)
+            highest_high = max(highest_high, hi)
         else:
             mfe_r = max(mfe_r, (fill_price - lo) / risk)
             mae_r = min(mae_r, (fill_price - hi) / risk)
-            lowest_low = min(lowest_low, lo)
 
             # Dynamic low-water mark trailing stop for short positions
             if trailing_atr_mult is not None and trailing_atr_mult > 0:
                 trail_stop_lvl = lowest_low + (trailing_atr_mult * risk)
                 current_stop = min(current_stop, trail_stop_lvl)
+            lowest_low = min(lowest_low, lo)
 
         # ---------------------------------------------------------------
         # NO PARTIALS MODE (100% position exit at target_r or ATR stop)
