@@ -6,8 +6,8 @@ import pytest
 import finance_vibe.pipeline_backtest as pb
 from finance_vibe.pipeline_backtest import (
     passes_macro_gate,
-    simulate_trade,
     simulate_scaled_trade,
+    simulate_trade_gap_aware,
 )
 
 
@@ -40,7 +40,7 @@ def test_simulate_trade_long_stopped():
         "Low": [100.0, 100.0, 95.0, 96.0],
         "Close": [105.0, 100.0, 97.0, 98.0],
     })
-    outcome, exit_date, exit_price, r_mult = simulate_trade(
+    outcome, exit_date, exit_price, r_mult, _ = simulate_trade_gap_aware(
         df,
         start_idx=1,
         is_long=True,
@@ -64,7 +64,7 @@ def test_simulate_trade_long_target1():
         "Low": [100.0, 99.0, 100.0, 101.0],
         "Close": [105.0, 100.0, 103.0, 104.0],
     })
-    outcome, _, exit_price, r_mult = simulate_trade(
+    outcome, _, exit_price, r_mult, _ = simulate_trade_gap_aware(
         df,
         start_idx=1,
         is_long=True,
@@ -87,7 +87,7 @@ def test_simulate_trade_short_r_multiple():
         "Low": [90.0, 99.0, 94.0, 95.0],
         "Close": [95.0, 100.0, 96.0, 97.0],
     })
-    outcome, _, exit_price, r_mult = simulate_trade(
+    outcome, _, exit_price, r_mult, _ = simulate_trade_gap_aware(
         df,
         start_idx=1,
         is_long=False,

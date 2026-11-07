@@ -9,14 +9,11 @@ import pandas as pd
 import pandas_ta as ta
 
 # --- PACKAGE IMPORT ---
-try:
-    from finance_vibe import config
-    from finance_vibe.analysis_engine import load_benchmark_frame, relative_strength
-except ImportError:
-    sys.path.append(os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..")))
-    from finance_vibe import config
-    from finance_vibe.analysis_engine import load_benchmark_frame, relative_strength
+if __package__ in (None, ""):  # run as a script: make `finance_vibe` importable
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from finance_vibe import config
+from finance_vibe.analysis_engine import load_benchmark_frame, relative_strength
 
 # =========================
 # PROFILE CONFIGURATION

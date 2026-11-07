@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import zlib
 import os
 import sys
+import zlib
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional
@@ -18,40 +18,27 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-try:
-    from finance_vibe import config
-    from finance_vibe.analysis_engine import load_benchmark_frame, load_ohlc_csv, ticker_from_filename
-    from finance_vibe.coiled_cobra import (
-        BENCHMARK,
-        LOOKBACK,
-        add_macro_indicators,
-        evaluate_coiled_cobra,
-        local_swing_low,
-    )
-    from finance_vibe.pipeline_backtest import simulate_trade, simulate_trade_gap_aware
-    from finance_vibe.trade_planner import calculate_stock_levels
-except ImportError:  # pragma: no cover
-    # Package lives under src/; repo root alone is not enough for `finance_vibe`.
+if __package__ in (None, ""):  # run as a script: make `finance_vibe` importable
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    from finance_vibe import config
-    from finance_vibe.analysis_engine import load_benchmark_frame, load_ohlc_csv, ticker_from_filename
-    from finance_vibe.coiled_cobra import (
-        BENCHMARK,
-        LOOKBACK,
-        add_macro_indicators,
-        evaluate_coiled_cobra,
-        local_swing_low,
-    )
-    from finance_vibe.pipeline_backtest import simulate_trade, simulate_trade_gap_aware
-    from finance_vibe.trade_planner import calculate_stock_levels
 
-from finance_vibe.backtest_baselines import (  # noqa: E402 - after the sys.path fallback above
+from finance_vibe import config
+from finance_vibe.analysis_engine import load_benchmark_frame, load_ohlc_csv, ticker_from_filename
+from finance_vibe.backtest_baselines import (
     cluster_bootstrap_diff,
     cluster_bootstrap_mean,
     forward_return_baselines,
     promotion_gate,
     r_per_signal,
 )
+from finance_vibe.coiled_cobra import (
+    BENCHMARK,
+    LOOKBACK,
+    add_macro_indicators,
+    evaluate_coiled_cobra,
+    local_swing_low,
+)
+from finance_vibe.pipeline_backtest import _fmt_date, simulate_trade_gap_aware
+from finance_vibe.trade_planner import calculate_stock_levels
 
 
 # Data-shape errors expected from short/degenerate windows (e.g. pandas_ta
@@ -196,26 +183,12 @@ FORWARD_HORIZONS = (2, 5, 13, 26)
 RANDOM_ENTRY_MULT = 3
 
 
-def _fmt_day(value):
-    return value.strftime("%Y-%m-%d") if value is not None and hasattr(value, "strftime") else value
-
-
-def _simulate(df, start_idx, entry, stop, t1, t2, entry_valid, max_hold, realistic, slippage_pct):
+def _simulate(df, start_idx, entry, stop, t1, t2, entry_valid, max_hold, slippage_pct):
     """Run one long trade; returns (outcome, exit_date, exit_price, r_mult, exit_idx)."""
-    if realistic:
-        return simulate_trade_gap_aware(
-            df, start_idx, is_long=True, entry=entry, stop=stop, target1=t1, target2=t2,
-            entry_valid_bars=entry_valid, max_hold_bars=max_hold, slippage_pct=slippage_pct,
-        )
-    outcome, exit_date, exit_price, r_mult = simulate_trade(
+    return simulate_trade_gap_aware(
         df, start_idx, is_long=True, entry=entry, stop=stop, target1=t1, target2=t2,
-        entry_valid_bars=entry_valid, max_hold_bars=max_hold,
+        entry_valid_bars=entry_valid, max_hold_bars=max_hold, slippage_pct=slippage_pct,
     )
-    exit_idx = None
-    if exit_date is not None:
-        hits = df.index[df["Date"] == exit_date]
-        exit_idx = int(hits[0]) if len(hits) else None
-    return outcome, exit_date, exit_price, r_mult, exit_idx
 
 
 def _trade_record(symbol, df, idx, setup_row, levels, sim) -> dict:
@@ -241,7 +214,7 @@ def _trade_record(symbol, df, idx, setup_row, levels, sim) -> dict:
 
     row = {
         "Symbol": symbol,
-        "Signal Date": _fmt_day(df.iloc[idx]["Date"]),
+        "Signal Date": _fmt_date(df.iloc[idx]["Date"]),
         "Setup Type": setup_row["Setup Type"],
         "Score": setup_row.get("Score"),
         "Grade": setup_row.get("Grade"),
@@ -255,7 +228,7 @@ def _trade_record(symbol, df, idx, setup_row, levels, sim) -> dict:
         "Target 1": round(t1, 2),
         "Target 2": round(t2, 2),
         "Outcome": outcome,
-        "Exit Date": _fmt_day(exit_date),
+        "Exit Date": _fmt_date(exit_date),
         "Exit Price": round(exit_price, 2) if exit_price is not None else None,
         "R Multiple": r_multiple,
         "Target_Label": target_label,
@@ -280,16 +253,14 @@ def backtest_ticker(
     max_hold: int,
     benchmark_df=None,
     *,
-    realistic: bool = True,
     one_position: bool = True,
     slippage_pct: float = config.BACKTEST_SLIPPAGE_PCT,
 ) -> tuple[list[dict], dict]:
-    """Walk-forward simulate one ticker using Coiled Cobra signals.
+    """Walk-forward simulate one ticker using Coiled Cobra signals (gap/slippage-aware fills).
 
-    ``realistic`` uses gap/slippage-aware fills (``simulate_trade_gap_aware``);
     ``one_position`` ignores new signals while a trade or pending entry is open,
-    so trades are not double-counted exposure. Set both False for the legacy
-    behaviour (e.g. to build an every-signal ML dataset).
+    so trades are not double-counted exposure. Set False to record every
+    signal (e.g. to build an every-signal ML dataset).
     """
     symbol = ticker_from_filename(path)
     df = load_ohlc_csv(path)
@@ -312,8 +283,7 @@ def backtest_ticker(
         counts["signals"] += 1
         try:
             entry, stop, t1, t2, _, _ = calculate_stock_levels(setup_row)
-            sim = _simulate(df, idx + 1, entry, stop, t1, t2, entry_valid, max_hold,
-                            realistic, slippage_pct)
+            sim = _simulate(df, idx + 1, entry, stop, t1, t2, entry_valid, max_hold, slippage_pct)
         except _DATA_ERRORS:
             counts["errors"] += 1
             continue
@@ -334,7 +304,6 @@ def random_entry_trades(
     entry_valid: int,
     max_hold: int,
     *,
-    realistic: bool = True,
     slippage_pct: float = config.BACKTEST_SLIPPAGE_PCT,
     seed: int = 0,
 ) -> list[dict]:
@@ -379,8 +348,7 @@ def random_entry_trades(
         }
         try:
             entry, stop, t1, t2, _, _ = calculate_stock_levels(setup_row)
-            sim = _simulate(df, i + 1, entry, stop, t1, t2, entry_valid, max_hold,
-                            realistic, slippage_pct)
+            sim = _simulate(df, i + 1, entry, stop, t1, t2, entry_valid, max_hold, slippage_pct)
         except _DATA_ERRORS:
             continue
         rows.append(_trade_record(symbol, df, i, setup_row, (entry, stop, t1, t2), sim))
@@ -435,19 +403,17 @@ def _backtest_ticker_worker(
     """
     opts = opts or {}
     symbol = ticker_from_filename(path)
-    realistic = opts.get("realistic", True)
     slippage = opts.get("slippage_pct", config.BACKTEST_SLIPPAGE_PCT)
     try:
         trades, counts = backtest_ticker(
             path, entry_valid, max_hold, benchmark_df=_WORKER_BENCHMARK_DF,
-            realistic=realistic, one_position=opts.get("one_position", True),
-            slippage_pct=slippage,
+            one_position=opts.get("one_position", True), slippage_pct=slippage,
         )
         n_draws = len(trades) * opts.get("random_mult", RANDOM_ENTRY_MULT)
         rand = random_entry_trades(
-            path, n_draws, entry_valid, max_hold, realistic=realistic,
+            path, n_draws, entry_valid, max_hold,
             slippage_pct=slippage, seed=opts.get("seed", 0),
-        ) if n_draws else []
+        )
         return symbol, trades, counts, rand, None
     except Exception as exc:  # noqa: BLE001 - worker boundary; returned to parent and logged
         return symbol, [], {}, [], _fmt_exc(exc)
@@ -527,8 +493,7 @@ def _print_summary(summary: dict) -> None:
     s, r, d = summary["strategy"], summary["random_entry"], summary["r_per_signal_vs_random"]
     print("\n=== Coiled Cobra vs null baselines ===")
     print(f"Universe: {summary['universe']}")
-    print(f"Fills: {'gap/slippage-aware' if summary['settings']['realistic'] else 'LEGACY (optimistic)'}; "
-          f"one position per ticker: {summary['settings']['one_position']}")
+    print(f"Fills: gap/slippage-aware; one position per ticker: {summary['settings']['one_position']}")
     if not s.get("signals"):
         print("No signals.")
         return
@@ -563,7 +528,6 @@ def run_backtest(
     max_hold: int = config.BACKTEST_MAX_HOLD_BARS,
     *,
     universe: Optional[str] = None,
-    realistic: bool = True,
     one_position: bool = True,
     random_mult: int = RANDOM_ENTRY_MULT,
     seed: int = 0,
@@ -594,7 +558,7 @@ def run_backtest(
     ]
 
     max_workers = os.cpu_count() or 1
-    opts = {"realistic": realistic, "one_position": one_position,
+    opts = {"one_position": one_position,
             "slippage_pct": config.BACKTEST_SLIPPAGE_PCT, "random_mult": random_mult, "seed": seed}
     all_trades: list[dict] = []
     all_random: list[dict] = []
@@ -675,7 +639,7 @@ def run_backtest(
         "mode": mode,
         "universe": universe_desc,
         "raw_data_as_of": datetime.fromtimestamp(newest).isoformat(timespec="minutes") if newest else None,
-        "settings": {"realistic": realistic, "one_position": one_position,
+        "settings": {"fills": "gap_aware", "one_position": one_position,
                      "slippage_pct": config.BACKTEST_SLIPPAGE_PCT, "entry_valid_bars": entry_valid,
                      "max_hold_bars": max_hold, "random_mult": random_mult, "seed": seed},
         "outcome_counts": all_counts,
@@ -700,10 +664,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-hold", type=int, default=config.BACKTEST_MAX_HOLD_BARS)
     parser.add_argument("--universe", default=None,
                         help="'manifest' (curated list only) or a CSV of tickers; default: all raw files")
-    parser.add_argument("--legacy-fills", action="store_true",
-                        help="Use the optimistic legacy simulator (exit exactly at stop, no slippage)")
     parser.add_argument("--all-signals", action="store_true",
-                        help="Allow overlapping positions on the same ticker (legacy; e.g. for ML datasets)")
+                        help="Allow overlapping positions on the same ticker (e.g. for ML datasets)")
     parser.add_argument("--random-mult", type=int, default=RANDOM_ENTRY_MULT,
                         help="Random-entry null draws per real signal (0 disables)")
     parser.add_argument("--seed", type=int, default=0)
@@ -720,8 +682,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.backtest:
         run_backtest(
             args.mode, args.tickers, args.entry_valid, args.max_hold,
-            universe=args.universe, realistic=not args.legacy_fills,
-            one_position=not args.all_signals, random_mult=args.random_mult,
+            universe=args.universe, one_position=not args.all_signals, random_mult=args.random_mult,
             seed=args.seed, primary_horizon=args.primary_horizon,
         )
 

@@ -1,12 +1,13 @@
 import os
+import sys
+
 import pandas as pd
 from yahooquery import Screener
 
-# --- 1. PACKAGE IMPORT ---
-try:
-    from finance_vibe import config
-except ImportError:
-    import config  # Fallback for local testing
+if __package__ in (None, ""):  # run as a script: make `finance_vibe` importable
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from finance_vibe import config
 
 MANIFEST_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'ticker_manifest.csv')

@@ -20,12 +20,10 @@ import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # --- 1. PACKAGE IMPORT ---
-try:
-    from finance_vibe import config
-except ImportError:
-    sys.path.append(os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..")))
-    from finance_vibe import config
+if __package__ in (None, ""):  # run as a script: make `finance_vibe` importable
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from finance_vibe import config
 
 logger = logging.getLogger(__name__)
 
@@ -199,28 +197,32 @@ def _select_benchmark_path(benchmark: str, data_mode: str) -> Optional[str]:
     if not os.path.isdir(raw_dir):
         return None
     bench = benchmark.upper()
-
-    def _rank(name: str) -> int:
-        parts = name.replace(".csv", "").split("_")
-        if len(parts) < 2:
-            return 0
-        tok = parts[1].lower()
-        if tok.endswith("y") and tok[:-1].isdigit():
-            return int(tok[:-1]) * 365
-        if tok.endswith("mo") and tok[:-2].isdigit():
-            return int(tok[:-2]) * 30
-        if tok.endswith("d") and tok[:-1].isdigit():
-            return int(tok[:-1])
-        return 0
-
     candidates = [
         f for f in os.listdir(raw_dir)
         if f.lower().endswith(".csv") and f.split("_")[0].upper() == bench
     ]
     if not candidates:
         return None
-    best = max(candidates, key=_rank)
+    best = max(candidates, key=period_rank)
     return os.path.join(raw_dir, best)
+
+
+def period_rank(path: str) -> int:
+    """Lookback length in days encoded in ``<TICKER>_<period>_<interval>.csv`` (10y > 5y > 6mo).
+
+    Used to prefer the longest-history file when several exist for one ticker.
+    """
+    parts = os.path.basename(path).replace(".csv", "").split("_")
+    if len(parts) < 2:
+        return 0
+    tok = parts[1].lower()
+    if tok.endswith("y") and tok[:-1].isdigit():
+        return int(tok[:-1]) * 365
+    if tok.endswith("mo") and tok[:-2].isdigit():
+        return int(tok[:-2]) * 30
+    if tok.endswith("d") and tok[:-1].isdigit():
+        return int(tok[:-1])
+    return 0
 
 
 def load_benchmark_frame(benchmark: str, data_mode: str) -> Optional[pd.DataFrame]:
@@ -460,31 +462,6 @@ def scan_one_file(path: str) -> ScanRow:
         sentiment=sentiment,
         action=action,
     )
-
-
-def calculate_vibe_score(ticker: str, df: pd.DataFrame, return_components: bool = False) -> dict:
-    """Score a single OHLC DataFrame (used by tests and ad-hoc analysis).
-
-    Args:
-        ticker: Symbol label (included for API compatibility; not used in math).
-        df: OHLCV history with Date and Close columns.
-        return_components: If True, include per-component point breakdown.
-
-    Returns:
-        Dict with ``Score`` and optionally ``Components`` or ``Error``.
-        On failure ``Score`` is ``None`` (not 0, which is a valid neutral score).
-    """
-    try:
-        feat = build_features(df)
-        last = feat.iloc[-1]
-        score, components = _compute_score(last)
-    except (KeyError, IndexError, ValueError, TypeError) as e:
-        logger.warning("Vibe score failed for %s: %s: %s", ticker, type(e).__name__, e)
-        return {"Score": None, "Error": f"{type(e).__name__}: {e}"}
-
-    if return_components:
-        return {"Score": score, "Components": components}
-    return {"Score": score}
 
 
 def run_scan(mode: str = "weekly", max_workers: Optional[int] = None) -> pd.DataFrame:

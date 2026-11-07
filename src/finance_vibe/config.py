@@ -49,18 +49,11 @@ STATIC_TICKERS = ["SPY", "QQQ", "IWM", "SCHD","IBIT","SCHG"]
 
 # Universe size for ticker_provider → data/active_tickers.csv
 ACTIVE_TICKER_CAP = 1000
-# yahooquery Screener IDs merged after the manifest (deduped, then capped)
-SCREENER_IDS = [
-    "most_actives",
-    #"day_gainers",
-    #"day_losers",
-    #"undervalued_growth_stocks",
-    #"growth_technology_stocks",
-    #"most_shorted_stocks",
-    #"aggressive_small_caps",
-    #"small_cap_gainers",
-    #"undervalued_large_caps",
-]
+# yahooquery Screener IDs merged after the manifest (deduped, then capped).
+# Other valid IDs include day_gainers, day_losers, undervalued_growth_stocks,
+# growth_technology_stocks, most_shorted_stocks, aggressive_small_caps,
+# small_cap_gainers and undervalued_large_caps.
+SCREENER_IDS = ["most_actives"]
 # Per-screener quote count (Yahoo typically caps near 250)
 SCREENER_COUNT = 250
 
@@ -84,8 +77,6 @@ BACKTEST_SHORT_MAX_SCORE = -2
 BACKTEST_WARMUP_BARS = 60
 BACKTEST_ENTRY_VALID_BARS = 4
 BACKTEST_MAX_HOLD_BARS = 12
-# Skip new signals within N bars of the prior accepted signal (cuts clustered re-entries)
-BACKTEST_COOLDOWN_BARS = 4
 
 # Realistic execution assumptions for the scaled-out swing simulator.
 # Adverse per-fill slippage applied to entries and market (stop) exits.
@@ -208,20 +199,6 @@ _SWING_DEFAULTS = {
     "rs_ratio_ma_bars": 20,
 }
 
-# Backward-compatible aliases (weekly defaults)
-SWING_ENTRY_ATR = _SWING_WEEKLY["entry_atr"]
-SWING_STOP_BUFFER_ATR = _SWING_WEEKLY["stop_buffer_atr"]
-SWING_STOP_ATR_CAP = _SWING_WEEKLY["stop_atr_cap"]
-SWING_T1_ATR = _SWING_WEEKLY["t1_atr"]
-SWING_T2_ATR = _SWING_WEEKLY["t2_atr"]
-SWING_PROX_PCT_WEEKLY = _SWING_WEEKLY["prox_pct"]
-SWING_PROX_PCT_DAILY = _SWING_DAILY["prox_pct"]
-SWING_RSI_MIN_LONG_WEEKLY = _SWING_WEEKLY["rsi_min_long"]
-SWING_RSI_MIN_LONG_DAILY = _SWING_DAILY["rsi_min_long"]
-SWING_RSI_MAX_LONG = _SWING_WEEKLY["rsi_max_long"]
-SWING_RSI_MIN_SHORT = _SWING_WEEKLY["rsi_min_short"]
-SWING_RSI_MAX_SHORT = _SWING_WEEKLY["rsi_max_short"]
-SWING_STRUCTURE_BARS = _SWING_WEEKLY["structure_bars"]
 
 
 def get_swing_params(mode: str = "weekly") -> dict:

@@ -100,10 +100,11 @@ def run_workflow():
     #   data    -> data timeframe (weekly/daily); shares raw data silo
     #   profile -> swing profile (weekly/daily/high_beta); drives geometry + logs
     # high_beta skips Coiled Cobra (LEAPS-oriented, not part of the long-only swing).
+    # The macro vibe report (analysis_engine.py) is not a pipeline stage; run it
+    # standalone if needed. Its scoring is still used by the swing scanner's gate.
     scripts_config = [
         {"path": "src/finance_vibe/ticker_provider.py", "pass_mode": False, "scope": "data"},
         {"path": "src/finance_vibe/data_ingestor.py", "pass_mode": True, "scope": "data"},
-        #{"path": "src/finance_vibe/analysis_engine.py", "pass_mode": True, "scope": "data"},
         {"path": "src/finance_vibe/swing_scanner.py", "pass_mode": True, "scope": "profile"},
         {"path": "src/finance_vibe/coiled_cobra.py", "pass_mode": True, "scope": "data",
          "skip_modes": ["high_beta"]},

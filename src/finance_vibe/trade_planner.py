@@ -10,11 +10,10 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 
-try:
-    from finance_vibe import config
-except ImportError:
-    sys.path.append(str(Path(__file__).resolve().parents[2] / "src"))
-    from finance_vibe import config
+if __package__ in (None, ""):  # run as a script: make `finance_vibe` importable
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from finance_vibe import config
 
 # =========================
 # PROFILE CONFIGURATION

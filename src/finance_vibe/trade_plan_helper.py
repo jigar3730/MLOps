@@ -8,13 +8,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-try:
-    from finance_vibe import config
-except ImportError:
-    import sys
-    from pathlib import Path
+if __package__ in (None, ""):  # run as a script: make `finance_vibe` importable
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from finance_vibe import config
+
+from finance_vibe import config
 
 # Ingestion guardrails (Part 3): drop broken / unprofitable rows before ranking.
 MAX_RISK_PCT_OF_CLOSE = config.MAX_RISK_PCT_OF_CLOSE

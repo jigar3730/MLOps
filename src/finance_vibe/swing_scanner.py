@@ -15,26 +15,17 @@ from datetime import datetime
 import pandas as pd
 import pandas_ta as ta
 
-try:
-    from finance_vibe import config
-    from finance_vibe.analysis_engine import (
-        build_features,
-        load_benchmark_frame,
-        relative_strength,
-        market_regime_ok,
-        score_last_row,
-    )
-except ImportError:
-    sys.path.append(os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..")))
-    from finance_vibe import config
-    from finance_vibe.analysis_engine import (
-        build_features,
-        load_benchmark_frame,
-        relative_strength,
-        market_regime_ok,
-        score_last_row,
-    )
+if __package__ in (None, ""):  # run as a script: make `finance_vibe` importable
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from finance_vibe import config
+from finance_vibe.analysis_engine import (
+    build_features,
+    load_benchmark_frame,
+    market_regime_ok,
+    relative_strength,
+    score_last_row,
+)
 
 # =========================
 # PROFILE CONFIGURATION

@@ -11,19 +11,17 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-try:
-    from finance_vibe import config
-    from finance_vibe.coiled_cobra_ml_training import FEATURE_COLS
-except ImportError:  # pragma: no cover - local direct execution
-    import sys
+if __package__ in (None, ""):  # run as a script: make `finance_vibe` importable
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    from finance_vibe import config
-    from finance_vibe.coiled_cobra_ml_training import FEATURE_COLS
+
+from finance_vibe import config
+from finance_vibe.coiled_cobra_ml_training import FEATURE_COLS
 
 logger = logging.getLogger(__name__)
 

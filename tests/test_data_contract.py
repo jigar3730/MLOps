@@ -198,13 +198,6 @@ def test_snapshot_raw_folder_noop_when_empty(tmp_path):
 # F-15 loud failures
 # ---------------------------------------------------------------------------
 
-def test_vibe_score_error_is_none_not_neutral_zero():
-    from finance_vibe.analysis_engine import calculate_vibe_score
-    out = calculate_vibe_score("BAD", pd.DataFrame({"Date": [], "Close": []}))
-    assert out["Score"] is None
-    assert "Error" in out
-
-
 def test_backtest_worker_reports_load_error(tmp_path):
     from finance_vibe import coiled_cobra_backtest as cb
     missing = tmp_path / "NOPE_10y_1wk.csv"

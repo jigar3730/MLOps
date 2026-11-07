@@ -25,29 +25,20 @@ from typing import Optional
 
 import pandas as pd
 
-try:
-    from finance_vibe import config
-    from finance_vibe.analysis_engine import (
-        build_features,
-        load_benchmark_frame,
-        load_ohlc_csv,
-        score_last_row,
-        ticker_from_filename,
-    )
-    from finance_vibe.swing_scanner import detect_setup_at_bar
-    from finance_vibe.trade_planner import calculate_stock_levels
-except ImportError:
+if __package__ in (None, ""):  # run as a script: make `finance_vibe` importable
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-    from finance_vibe import config
-    from finance_vibe.analysis_engine import (
-        build_features,
-        load_benchmark_frame,
-        load_ohlc_csv,
-        score_last_row,
-        ticker_from_filename,
-    )
-    from finance_vibe.swing_scanner import detect_setup_at_bar
-    from finance_vibe.trade_planner import calculate_stock_levels
+
+from finance_vibe import config
+from finance_vibe.analysis_engine import (
+    build_features,
+    load_benchmark_frame,
+    load_ohlc_csv,
+    period_rank,
+    score_last_row,
+    ticker_from_filename,
+)
+from finance_vibe.swing_scanner import detect_setup_at_bar
+from finance_vibe.trade_planner import calculate_stock_levels
 
 
 def passes_macro_gate(
@@ -59,65 +50,6 @@ def passes_macro_gate(
     if setup_type == "SETUP_SHORT":
         return score <= short_max
     return False
-
-
-def simulate_trade(
-    df: pd.DataFrame,
-    start_idx: int,
-    is_long: bool,
-    entry: float,
-    stop: float,
-    target1: float,
-    target2: float,
-    entry_valid_bars: int,
-    max_hold_bars: int,
-) -> tuple[str, Optional[pd.Timestamp], Optional[float], Optional[float]]:
-    """Forward-simulate entry fill, stop, and targets on High/Low bars after *start_idx*."""
-    risk = abs(entry - stop)
-    if risk <= 0:
-        return "no_fill", None, None, None
-
-    filled = False
-    fill_idx = None
-
-    for j in range(start_idx, min(start_idx + entry_valid_bars, len(df))):
-        bar = df.iloc[j]
-        if is_long and bar["Low"] <= entry:
-            filled = True
-            fill_idx = j
-            break
-        if not is_long and bar["High"] >= entry:
-            filled = True
-            fill_idx = j
-            break
-
-    if not filled or fill_idx is None:
-        return "no_fill", None, None, None
-
-    for k in range(fill_idx, min(fill_idx + max_hold_bars, len(df))):
-        bar = df.iloc[k]
-        if is_long:
-            if bar["Low"] <= stop:
-                return "stopped", bar["Date"], stop, -1.0
-            if bar["High"] >= target2:
-                return "target2", bar["Date"], target2, (target2 - entry) / risk
-            if bar["High"] >= target1:
-                return "target1", bar["Date"], target1, (target1 - entry) / risk
-        else:
-            if bar["High"] >= stop:
-                return "stopped", bar["Date"], stop, -1.0
-            if bar["Low"] <= target2:
-                return "target2", bar["Date"], target2, (entry - target2) / risk
-            if bar["Low"] <= target1:
-                return "target1", bar["Date"], target1, (entry - target1) / risk
-
-    last_idx = min(fill_idx + max_hold_bars - 1, len(df) - 1)
-    exit_price = float(df.iloc[last_idx]["Close"])
-    if is_long:
-        r_mult = (exit_price - entry) / risk
-    else:
-        r_mult = (entry - exit_price) / risk
-    return "expired", df.iloc[last_idx]["Date"], exit_price, r_mult
 
 
 def simulate_trade_gap_aware(
@@ -133,9 +65,9 @@ def simulate_trade_gap_aware(
     *,
     slippage_pct: float = 0.0,
 ) -> tuple[str, Optional[pd.Timestamp], Optional[float], Optional[float], Optional[int]]:
-    """Full-exit simulator with realistic fills (same exit rules as :func:`simulate_trade`).
+    """Full-exit simulator: limit entry, then stop / target2 / target1 / time exit.
 
-    Differences from the legacy simulator:
+    Fill model:
       * Limit entry fills at the open when the bar gaps through the entry.
       * Stops fill at the open when the bar gaps through the stop (worse fill),
         and never better than the entry fill on the fill bar.
@@ -666,9 +598,7 @@ def backtest_ticker(
     return trades, counts
 
 
-def load_ticker_filter(
-    mode_cfg: dict, tickers_arg: Optional[str]
-) -> Optional[set[str]]:
+def load_ticker_filter(tickers_arg: Optional[str]) -> Optional[set[str]]:
     """Resolve optional --tickers list; otherwise use active_tickers.csv if present."""
     if tickers_arg:
         return {t.strip().upper() for t in tickers_arg.split(",") if t.strip()}
@@ -683,21 +613,6 @@ def load_ticker_filter(
     return None
 
 
-def _period_rank(path: str) -> int:
-    """Prefer longer lookbacks when multiple CSVs exist for one ticker (5y > 2y)."""
-    parts = os.path.basename(path).replace(".csv", "").split("_")
-    if len(parts) < 2:
-        return 0
-    token = parts[1].lower()
-    if token.endswith("y") and token[:-1].isdigit():
-        return int(token[:-1]) * 365
-    if token.endswith("mo") and token[:-2].isdigit():
-        return int(token[:-2]) * 30
-    if token.endswith("d") and token[:-1].isdigit():
-        return int(token[:-1])
-    return 0
-
-
 def select_raw_paths(raw_dir: str, ticker_filter: Optional[set[str]]) -> list[str]:
     """List raw CSVs, optionally filtered, de-duped to one file per symbol."""
     paths = sorted(
@@ -710,7 +625,7 @@ def select_raw_paths(raw_dir: str, ticker_filter: Optional[set[str]]) -> list[st
         symbol = ticker_from_filename(path)
         if ticker_filter and symbol not in ticker_filter:
             continue
-        rank = _period_rank(path)
+        rank = period_rank(path)
         prev = best.get(symbol)
         if prev is None or rank > prev[0]:
             best[symbol] = (rank, path)
@@ -821,7 +736,7 @@ def run_backtest(
     swing = config.get_swing_params(swing_profile)
     raw_dir = mode_cfg["raw_dir"]
     logs_dir = config.get_log_dir(mode)
-    ticker_filter = load_ticker_filter(mode_cfg, tickers)
+    ticker_filter = load_ticker_filter(tickers)
 
     if entry_valid is None:
         entry_valid = swing["entry_valid_bars"]

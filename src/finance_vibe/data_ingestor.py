@@ -6,19 +6,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 # --- 1. PACKAGE IMPORT (Upgraded for Multi-Environment Paths) ---
-try:
-    # 1st Priority: Docker module structure (python -m src.finance_vibe.data_ingestor)
-    from src.finance_vibe import config
-except ImportError:
-    try:
-        # 2nd Priority: Flat direct package fallback
-        from finance_vibe import config
-    except ImportError:
-        # 3rd Priority: Manual repository root insertion for local direct execution
-        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
-        if repo_root not in sys.path:
-            sys.path.append(repo_root)
-        from src.finance_vibe import config
+if __package__ in (None, ""):  # run as a script: make `finance_vibe` importable
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+# Always import as `finance_vibe.config` so there is exactly one config module
+# (importing `src.finance_vibe.config` created a second, independent copy).
+from finance_vibe import config
 
 
 MARKET_TZ = ZoneInfo("America/New_York")
