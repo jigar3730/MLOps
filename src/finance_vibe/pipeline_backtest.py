@@ -593,7 +593,9 @@ def load_ticker_filter(
     if os.path.isfile(active_path):
         try:
             return set(pd.read_csv(active_path)["Ticker"].dropna().str.upper())
-        except Exception:
+        except (OSError, KeyError, ValueError, pd.errors.ParserError) as exc:
+            print(f"⚠️ Could not read {active_path} ({type(exc).__name__}: {exc}); "
+                  "backtesting every raw file instead.")
             return None
     return None
 

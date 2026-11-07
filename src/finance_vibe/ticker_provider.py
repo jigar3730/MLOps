@@ -111,8 +111,8 @@ def refresh_active_tickers():
             f"(cap={cap}) to {config.TICKER_LIST_PATH}"
         )
 
-    except Exception as e:
-        print(f"❌ Error during ticker discovery: {e}")
+    except Exception as e:  # noqa: BLE001 - network screener boundary; falls back to static list
+        print(f"❌ Error during ticker discovery: {type(e).__name__}: {e}")
         # Still persist the priority baseline so the pipeline is not blocked.
         if static_tickers:
             fallback = static_tickers[:cap]

@@ -8,6 +8,7 @@ Full rubric: Scoring_Logic.md in this package.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from dataclasses import dataclass
@@ -25,6 +26,8 @@ except ImportError:
     sys.path.append(os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..")))
     from finance_vibe import config
+
+logger = logging.getLogger(__name__)
 
 # -----------------------------
 # Tunables
@@ -228,10 +231,14 @@ def load_benchmark_frame(benchmark: str, data_mode: str) -> Optional[pd.DataFram
     """
     path = _select_benchmark_path(benchmark, data_mode)
     if not path:
+        logger.warning("Benchmark %s not found in %s raw data; RS/regime checks will fail closed.",
+                       benchmark, data_mode)
         return None
     try:
         df = load_ohlc_csv(path)
-    except Exception:
+    except (OSError, ValueError, KeyError, pd.errors.ParserError) as exc:
+        logger.warning("Benchmark %s at %s could not be loaded (%s: %s); RS/regime checks will fail closed.",
+                       benchmark, path, type(exc).__name__, exc)
         return None
     df = df.copy()
     df["Date"] = pd.to_datetime(df["Date"])
@@ -465,18 +472,19 @@ def calculate_vibe_score(ticker: str, df: pd.DataFrame, return_components: bool 
 
     Returns:
         Dict with ``Score`` and optionally ``Components`` or ``Error``.
+        On failure ``Score`` is ``None`` (not 0, which is a valid neutral score).
     """
     try:
         feat = build_features(df)
         last = feat.iloc[-1]
         score, components = _compute_score(last)
+    except (KeyError, IndexError, ValueError, TypeError) as e:
+        logger.warning("Vibe score failed for %s: %s: %s", ticker, type(e).__name__, e)
+        return {"Score": None, "Error": f"{type(e).__name__}: {e}"}
 
-        if return_components:
-            return {"Score": score, "Components": components}
-        return {"Score": score}
-
-    except Exception as e:
-        return {"Score": 0, "Error": str(e)}
+    if return_components:
+        return {"Score": score, "Components": components}
+    return {"Score": score}
 
 
 def run_scan(mode: str = "weekly", max_workers: Optional[int] = None) -> pd.DataFrame:
@@ -499,8 +507,9 @@ def run_scan(mode: str = "weekly", max_workers: Optional[int] = None) -> pd.Data
         for fut in as_completed(futures):
             try:
                 results.append(fut.result())
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - process-pool boundary; logged + counted
                 errors += 1
+                print(f"⚠️ {ticker_from_filename(futures[fut])}: {type(exc).__name__}: {exc}")
                 continue
 
     if errors:

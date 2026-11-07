@@ -497,3 +497,113 @@ def validate_and_clean_ohlcv(df: pd.DataFrame, *, require_volume: bool = True) -
 
     out = out.dropna(subset=["Open", "High", "Low", "Close"]).reset_index(drop=True)
     return out
+
+
+# =====================================================================
+# PLAUSIBILITY CONTRACT (ticker-level, applied at ingestion)
+# =====================================================================
+# Schema-valid data can still be untradeable or corrupt (sub-penny prints,
+# illiquid shells, unadjusted splits). These thresholds are expressed per
+# *trading day* so the same values work for weekly and daily bars. Values
+# were chosen from the 2026-11-07 weekly universe profile (DATA_QUALITY_REVIEW F-07).
+PLAUSIBILITY = {
+    "min_last_close": 3.0,                  # reject sub-$3 names (penny / poor options chains)
+    "min_median_dollar_volume_per_day": 4e6,  # $4M/day ≈ $20M/week over the window
+    "max_zero_volume_share": 0.05,          # >5% zero-volume bars in the window -> reject
+    "window_trading_days": 252,             # ~1 year evaluated for liquidity checks
+    "extreme_move_ratio": 10.0,             # one-bar ×10 or ×0.1 -> warn (possible bad print/split)
+}
+
+# Trading days represented by one bar, per yfinance interval.
+DAYS_PER_BAR = {"1d": 1, "1wk": 5}
+
+
+def assess_plausibility(df: pd.DataFrame, interval: str = "1wk", rules: dict = None) -> dict:
+    """Ticker-level plausibility checks on a cleaned OHLCV frame.
+
+    Returns ``{"reject": [reasons], "warn": [reasons]}``; any ``reject`` entry
+    means the series should not be saved. Row-level structural violations
+    (High < Low, non-positive prices) are also reported as rejects because they
+    indicate a corrupt feed rather than a market event.
+    """
+    r = {**PLAUSIBILITY, **(rules or {})}
+    reject: list[str] = []
+    warn: list[str] = []
+    if df.empty:
+        return {"reject": ["empty"], "warn": warn}
+
+    o, h, lo, c = (df[k].astype(float) for k in ("Open", "High", "Low", "Close"))
+    bad_rows = int(((h < lo) | (o <= 0) | (h <= 0) | (lo <= 0) | (c <= 0)).sum())
+    if bad_rows:
+        reject.append(f"corrupt_ohlc_rows:{bad_rows}")
+
+    last_close = float(c.iloc[-1])
+    if last_close < r["min_last_close"]:
+        reject.append(f"price_below_min:{last_close:.2f}<{r['min_last_close']:.2f}")
+
+    per_bar = DAYS_PER_BAR.get(interval, 1)
+    window_bars = max(1, int(round(r["window_trading_days"] / per_bar)))
+    recent = df.tail(window_bars)
+    if "Volume" in df.columns:
+        vol = recent["Volume"].astype(float)
+        dollar_per_day = (recent["Close"].astype(float) * vol / per_bar).median()
+        min_dv = r["min_median_dollar_volume_per_day"]
+        if not (dollar_per_day >= min_dv):  # also catches NaN
+            reject.append(f"illiquid:median_${dollar_per_day/1e6:.2f}M/day<${min_dv/1e6:.0f}M")
+        zero_share = float((vol.fillna(0) == 0).mean())
+        if zero_share > r["max_zero_volume_share"]:
+            reject.append(f"zero_volume_share:{zero_share:.1%}>{r['max_zero_volume_share']:.0%}")
+
+    ratio = (c / c.shift(1)).dropna()
+    k = r["extreme_move_ratio"]
+    n_extreme = int(((ratio >= k) | (ratio <= 1.0 / k)).sum())
+    if n_extreme:
+        warn.append(f"extreme_moves:{n_extreme}")
+
+    return {"reject": reject, "warn": warn}
+
+
+# =====================================================================
+# FRESHNESS CONTRACT
+# =====================================================================
+MARKET_TZ_NAME = "America/New_York"
+
+
+def expected_last_bar(interval: str, now=None) -> pd.Timestamp:
+    """Label of the most recent *completed* bar for *interval* as of *now*.
+
+    Weekly bars are labelled by their Monday and complete at Friday 16:00 ET.
+    Daily bars complete at 16:00 ET on weekdays (exchange holidays are not
+    modelled, so callers should allow a small tolerance for daily data).
+    """
+    if now is None:
+        now = pd.Timestamp.now(tz=MARKET_TZ_NAME)
+    now = pd.Timestamp(now)
+    if now.tzinfo is not None:
+        now = now.tz_convert(MARKET_TZ_NAME).tz_localize(None)
+    close_time = pd.Timedelta(hours=16)
+
+    if interval == "1wk":
+        monday = now.normalize() - pd.Timedelta(days=now.day_of_week)
+        if now >= monday + pd.Timedelta(days=4) + close_time:
+            return monday
+        return monday - pd.Timedelta(days=7)
+
+    day = now.normalize()
+    if now < day + close_time:
+        day -= pd.Timedelta(days=1)
+    while day.day_of_week >= 5:
+        day -= pd.Timedelta(days=1)
+    return day
+
+
+def staleness_bars(last_bar, interval: str, now=None) -> int:
+    """How many bars *last_bar* lags the expected last completed bar (0 = fresh)."""
+    expected = expected_last_bar(interval, now)
+    last = pd.Timestamp(last_bar)
+    if last.tzinfo is not None:
+        last = last.tz_localize(None)
+    last = last.normalize()
+    if interval == "1wk":
+        return max(0, int((expected - last).days // 7))
+    return max(0, int(len(pd.bdate_range(last, expected)) - 1))

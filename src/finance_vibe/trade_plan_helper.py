@@ -226,10 +226,10 @@ def process_trade_plan(mode: str = "weekly", *, today: str | None = None) -> Pat
         safe_risk = df["Risk Per Share"].replace(0, pd.NA)
         df["R:R T1"] = (pd.Series(reward_t1, index=df.index, dtype="float") / safe_risk.astype(float)).round(2)
         df["R:R T2"] = (pd.Series(reward_t2, index=df.index, dtype="float") / safe_risk.astype(float)).round(2)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - fatal: prints traceback and exits non-zero
         print("❌ Fatal exception caught inside metrics distribution generation engine:")
         traceback.print_exc()
-        raise SystemExit(1) from None
+        raise SystemExit(1) from exc
 
     print("🛡️ Applying ingestion guardrails (risk ≤5%, checklist ≥5/6, R:R T1 ≥ 2)...")
     df, filter_stats = apply_ingestion_filters(df)

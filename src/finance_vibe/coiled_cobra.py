@@ -499,8 +499,8 @@ def run_scanner():
             })
             results.append(row)
 
-        except Exception as e:
-            logger.error(f"Error scoring {symbol}: {str(e)}")
+        except Exception as e:  # noqa: BLE001 - per-symbol boundary; logged + counted below
+            logger.error(f"Error scoring {symbol}: {type(e).__name__}: {e}")
             rejection_counts["execution_error"] = (
                 rejection_counts.get("execution_error", 0) + 1
             )
@@ -518,8 +518,8 @@ def run_scanner():
             else:
                 logger.info("No ML model available; ranking by Score.")
                 df_out = df_out.sort_values(by="Score", ascending=False)
-        except Exception as e:
-            logger.warning(f"ML ranking skipped ({e}); ranking by Score.")
+        except Exception as e:  # noqa: BLE001 - optional soft signal must never block the scan
+            logger.warning(f"ML ranking skipped ({type(e).__name__}: {e}); ranking by Score.")
             df_out = df_out.sort_values(by="Score", ascending=False)
 
         df_out = df_out.reindex(columns=config.SETUP_ROW_COLUMNS)

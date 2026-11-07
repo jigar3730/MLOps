@@ -1,12 +1,15 @@
-pandas
-numpy
-pandas_ta
-yfinance
-yahooquery
-Flask
-tabulate
-pytest>=8.0.0
-xgboost
-lightgbm
-scikit-learn
-matplotlib
+# Direct dependencies, pinned to the versions the test suite passes on.
+# Transitive pins live in requirements.lock (used as constraints by the Dockerfile).
+# Upgrade deliberately: bump here, rebuild, run pytest, then refresh requirements.lock.
+pandas==3.1.1
+numpy==2.2.6
+pandas-ta==0.4.71b0  # pre-release; pinned exactly because beta builds can change indicator output
+yfinance==1.8.0
+yahooquery==2.4.1
+Flask==3.1.3
+tabulate==0.10.0
+pytest==9.2.0
+xgboost==3.4.1
+lightgbm==4.7.0
+scikit-learn==1.9.1
+matplotlib==3.11.2

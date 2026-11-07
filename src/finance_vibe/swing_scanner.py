@@ -303,7 +303,10 @@ def _soft_vibe_gate(setup_type: str, sp: dict, df: pd.DataFrame):
     try:
         feat = build_features(df)
         score = score_last_row(feat.iloc[-1])
-    except Exception:
+    except (KeyError, IndexError, ValueError, TypeError) as exc:
+        # Fail closed (no setup) but leave a trace; other errors are bugs and propagate.
+        logger.warning("Vibe gate could not score window (%s: %s); rejecting setup.",
+                       type(exc).__name__, exc)
         return False, None
 
     if setup_type == "SETUP_LONG":

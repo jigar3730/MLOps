@@ -63,10 +63,10 @@ def fetch_live_prices(symbols):
             try:
                 # fast_info fetches the live feed price rapidly without scraping overhead
                 prices[sym] = round(tickers.tickers[sym].fast_info['last_price'], 2)
-            except Exception:
+            except Exception:  # noqa: BLE001 - per-symbol live quote; display "N/A"
                 prices[sym] = "N/A"  # Fallback if ticker data fetch fails
         return prices
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - network boundary for the UI
         print(f"Error fetching live prices: {e}")
         return {sym: "N/A" for sym in symbols}
 
@@ -242,7 +242,7 @@ def view_run(mode, date):
         # escape=False ensures Pandas treats custom injected HTML elements cleanly
         table_html = df.to_html(classes="table", index=False, border=0, escape=False)
         return render_template_string(VIEW_TEMPLATE, mode=mode, date=date, file_name=requested_file, table_html=table_html)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - request boundary; render an error page
         return f"<h3>❌ Failed to parse data contents:</h3><pre>{str(e)}</pre>", 500
 
 if __name__ == "__main__":

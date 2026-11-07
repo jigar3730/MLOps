@@ -9,6 +9,7 @@ pipeline keeps running on the rubric ``Score`` sort.
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -23,6 +24,8 @@ except ImportError:  # pragma: no cover - local direct execution
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
     from finance_vibe import config
     from finance_vibe.coiled_cobra_ml_training import FEATURE_COLS
+
+logger = logging.getLogger(__name__)
 
 XGB_MODEL_FILENAME = "coiled_cobra_xgb_model.json"
 LGB_MODEL_FILENAME = "coiled_cobra_lgb_model.txt"
@@ -40,8 +43,8 @@ def resolve_model_paths(mode: str = "weekly") -> dict[str, Path | None]:
     search_dirs: list[Path] = []
     try:
         search_dirs.append(Path(config.get_log_dir(mode)))
-    except Exception:  # pragma: no cover - defensive; log dir resolution is cheap
-        pass
+    except (KeyError, ValueError, OSError) as exc:  # pragma: no cover - defensive
+        logger.warning("Could not resolve log dir for mode %r: %s", mode, exc)
 
     project_root = Path(config.PROJECT_ROOT)
     search_dirs.extend([
@@ -116,7 +119,8 @@ def _load_xgb(path: Path):
         booster = xgb.Booster()
         booster.load_model(str(path))
         return booster
-    except Exception:  # pragma: no cover - corrupt/incompatible artifact
+    except Exception as exc:  # noqa: BLE001 - third-party loader; corrupt/incompatible artifact
+        logger.warning("XGBoost model %s failed to load (%s: %s); skipping.", path, type(exc).__name__, exc)
         return None
 
 
@@ -127,7 +131,8 @@ def _load_lgb(path: Path):
         return None
     try:
         return lgb.Booster(model_file=str(path))
-    except Exception:  # pragma: no cover - corrupt/incompatible artifact
+    except Exception as exc:  # noqa: BLE001 - third-party loader; corrupt/incompatible artifact
+        logger.warning("LightGBM model %s failed to load (%s: %s); skipping.", path, type(exc).__name__, exc)
         return None
 
 
@@ -156,16 +161,16 @@ def predict_returns(df: pd.DataFrame, mode: str = "weekly") -> pd.Series:
             try:
                 import xgboost as xgb
                 preds.append(booster.predict(xgb.DMatrix(X, feature_names=list(X.columns))))
-            except Exception:  # pragma: no cover
-                pass
+            except Exception as exc:  # noqa: BLE001 - third-party predict; e.g. feature mismatch
+                logger.warning("XGBoost prediction failed (%s: %s); skipping model.", type(exc).__name__, exc)
 
     if paths["lgb"] is not None:
         booster = _load_lgb(paths["lgb"])
         if booster is not None:
             try:
                 preds.append(np.asarray(booster.predict(X)))
-            except Exception:  # pragma: no cover
-                pass
+            except Exception as exc:  # noqa: BLE001 - third-party predict; e.g. feature mismatch
+                logger.warning("LightGBM prediction failed (%s: %s); skipping model.", type(exc).__name__, exc)
 
     if not preds:
         return result

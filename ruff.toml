@@ -1,0 +1,8 @@
+# Minimal lint gate: correctness errors + no silent blind excepts.
+# Intentional boundaries (network, process pools, CLI/request handlers) must
+# log/count the error and carry `# noqa: BLE001 - <reason>`.
+# Run:  ruff check src tests
+target-version = "py312"
+
+[lint]
+select = ["F", "E9", "BLE", "B904"]

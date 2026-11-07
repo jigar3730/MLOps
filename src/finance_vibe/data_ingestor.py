@@ -80,13 +80,13 @@ def resample_daily_to_weekly(daily: pd.DataFrame) -> pd.DataFrame:
 
 def _log_ingest_error(logs_dir: str, ticker: str, message: str) -> None:
     """Append a structured ingestion failure to ``ingest_errors_<date>.csv``."""
-    stamp = datetime.now().strftime("%Y-%m-%d")
-    err_path = os.path.join(logs_dir, f"ingest_errors_{stamp}.csv")
+    now = datetime.now(MARKET_TZ)
+    err_path = os.path.join(logs_dir, f"ingest_errors_{now:%Y-%m-%d}.csv")
     row = pd.DataFrame(
         [{
             "Ticker": ticker,
             "Error": message,
-            "Timestamp": datetime.now().isoformat(timespec="seconds"),
+            "Timestamp": now.isoformat(timespec="seconds"),
         }]
     )
     header = not os.path.exists(err_path)
@@ -105,7 +105,7 @@ def ingest_market_data(mode="weekly"):
 
     if not os.path.exists(csv_path):
         print(f"❌ Could not find ticker list at {csv_path}. Please run ticker_provider.py first.")
-        return
+        return False
 
     # Ensure targeted sub-silo raw data directory exists
     os.makedirs(raw_dir, exist_ok=True)
@@ -118,6 +118,12 @@ def ingest_market_data(mode="weekly"):
 
     saved = 0
     rejected = 0
+    warned = 0
+    stale: list[str] = []
+    saved_tickers: set[str] = set()
+    now = datetime.now(MARKET_TZ)
+    # Daily bars ignore exchange holidays, so allow one bar of slack there.
+    stale_tolerance = 0 if INTERVAL == "1wk" else 1
 
     for ticker in tickers:
         print(f"Processing {ticker:6}...", end=" ", flush=True)
@@ -166,25 +172,56 @@ def ingest_market_data(mode="weekly"):
                 rejected += 1
                 continue
 
+            # --- 4c. PLAUSIBILITY CONTRACT (penny / illiquid / corrupt feeds) ---
+            verdict = config.assess_plausibility(clean, INTERVAL)
+            if verdict["reject"]:
+                reasons = ";".join(verdict["reject"])
+                print(f"🚫 Rejected: {reasons}")
+                _log_ingest_error(logs_dir, ticker, f"reject:{reasons}")
+                rejected += 1
+                continue
+            for w in verdict["warn"]:
+                _log_ingest_error(logs_dir, ticker, f"warn:{w}")
+                warned += 1
+
+            # --- 4d. FRESHNESS (saved, but flagged) ---
+            lag = config.staleness_bars(clean["Date"].iloc[-1], INTERVAL, now)
+            if lag > stale_tolerance:
+                _log_ingest_error(logs_dir, ticker, f"warn:stale_last_bar:{lag}_bars")
+                stale.append(ticker)
+
             # --- 5. SAVE ---
             save_path = config.get_raw_path(ticker, mode_cfg)
             clean.to_csv(save_path, index=False)
-            print(f"✅ {os.path.basename(save_path)}")
+            print(f"✅ {os.path.basename(save_path)}" + (f" ⚠️ stale {lag} bar(s)" if lag > stale_tolerance else ""))
             saved += 1
+            saved_tickers.add(str(ticker).upper())
 
         except ValueError as e:
             # Schema/validation failure from validate_and_clean_ohlcv
             print(f"❌ Validation: {e}")
             _log_ingest_error(logs_dir, ticker, f"validation:{e}")
             rejected += 1
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            _log_ingest_error(logs_dir, ticker, f"exception:{e}")
+        except Exception as e:  # noqa: BLE001 - per-ticker network/feed boundary; logged + counted
+            print(f"❌ Error: {type(e).__name__}: {e}")
+            _log_ingest_error(logs_dir, ticker, f"exception:{type(e).__name__}:{e}")
             rejected += 1
 
-    print(f"\n📊 Ingestion summary: {saved} saved, {rejected} rejected.")
-    if rejected:
-        print(f"   Failure log: {os.path.join(logs_dir, 'ingest_errors_<date>.csv')}")
+    print(f"\n📊 Ingestion summary: {saved} saved, {rejected} rejected, "
+          f"{warned} warning(s), {len(stale)} stale.")
+    if rejected or warned or stale:
+        print(f"   Issue log: {os.path.join(logs_dir, 'ingest_errors_<date>.csv')}")
+
+    # The benchmark drives every regime / relative-strength check; scoring on a
+    # missing or stale benchmark silently zeroes those pillars, so fail loudly.
+    bench = config.BENCHMARK_TICKER.upper()
+    if bench not in saved_tickers:
+        print(f"❌ Benchmark {bench} was not ingested; downstream RS/regime scores would be invalid.")
+        return False
+    if bench in stale:
+        print(f"❌ Benchmark {bench} is stale; refusing to continue on out-of-date data.")
+        return False
+    return True
 
 
 if __name__ == "__main__":
@@ -197,4 +234,5 @@ if __name__ == "__main__":
         else:
             print(f"⚠️ Unknown mode '{arg_mode}'. Defaulting to 'weekly'.")
 
-    ingest_market_data(mode=selected_mode)
+    ok = ingest_market_data(mode=selected_mode)
+    sys.exit(0 if ok else 1)

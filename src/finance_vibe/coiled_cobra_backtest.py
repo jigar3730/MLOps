@@ -43,6 +43,24 @@ except ImportError:  # pragma: no cover
     from finance_vibe.trade_planner import calculate_stock_levels
 
 
+# Data-shape errors expected from short/degenerate windows (e.g. pandas_ta
+# returns None for too-short series). Anything else is a bug and must surface.
+_DATA_ERRORS = (KeyError, IndexError, ValueError, TypeError, ZeroDivisionError)
+
+
+def _fmt_exc(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _write_failures(logs_dir: str, kind: str, failures: list[dict]) -> Optional[str]:
+    """Persist per-ticker worker failures so dropped tickers are auditable."""
+    if not failures:
+        return None
+    path = os.path.join(logs_dir, f"coiled_cobra_{kind}_errors_{datetime.now():%Y-%m-%d}.csv")
+    pd.DataFrame(failures).to_csv(path, index=False)
+    return path
+
+
 def detect_cobra_setup_at_bar(
     df: pd.DataFrame,
     symbol: str,
@@ -55,7 +73,7 @@ def detect_cobra_setup_at_bar(
     window = df.copy()
     try:
         window = add_macro_indicators(window)
-    except Exception:
+    except _DATA_ERRORS:
         return None
 
     if len(window) < 2:
@@ -123,6 +141,7 @@ def generate_backfill(mode: str = "weekly", tickers: Optional[str] = None) -> pd
     print(f"Workers: {max_workers}  Tickers: {len(work_paths)}\n")
 
     results_by_path: dict[str, list[dict]] = {}
+    failures: list[dict] = []
     with ProcessPoolExecutor(
         max_workers=max_workers,
         initializer=_init_cobra_worker,
@@ -133,13 +152,19 @@ def generate_backfill(mode: str = "weekly", tickers: Optional[str] = None) -> pd
             path = futures[fut]
             symbol = ticker_from_filename(path)
             try:
-                symbol, rows = fut.result()
-            except Exception as exc:
-                print(f"{symbol}: error — {exc}", file=sys.stderr)
-                rows = []
+                symbol, rows, error = fut.result()
+            except Exception as exc:  # noqa: BLE001 - process crash / pickling boundary
+                rows, error = [], f"worker: {_fmt_exc(exc)}"
+            if error:
+                print(f"{symbol}: error — {error}", file=sys.stderr)
+                failures.append({"Symbol": symbol, "Error": error})
             results_by_path[path] = rows
             if rows:
                 print(f"{symbol}: {len(rows)} setup(s)")
+
+    err_path = _write_failures(logs_dir, "backfill", failures)
+    if err_path:
+        print(f"⚠️ {len(failures)} ticker(s) failed; details: {err_path}")
 
     # Reassemble in sorted path order so CSV row sequence matches single-threaded runs.
     all_rows: list[dict] = []
@@ -197,7 +222,7 @@ def backtest_ticker(
                 entry_valid_bars=entry_valid,
                 max_hold_bars=max_hold,
             )
-        except Exception:
+        except _DATA_ERRORS:
             counts["errors"] += 1
             continue
 
@@ -275,14 +300,16 @@ def _init_cobra_worker(mode: str) -> None:
     _WORKER_BENCHMARK_DF = load_benchmark_frame(BENCHMARK, mode)
 
 
-def _backfill_ticker_worker(path: str) -> tuple[str, list[dict]]:
-    """Process-pool worker: load ticker OHLC locally and collect Coiled Cobra setups."""
+def _backfill_ticker_worker(path: str) -> tuple[str, list[dict], Optional[str]]:
+    """Process-pool worker: load ticker OHLC locally and collect Coiled Cobra setups.
+
+    Returns ``(symbol, rows, error)``; ``error`` is None on success.
+    """
     symbol = ticker_from_filename(path)
     try:
         df = load_ohlc_csv(path)
-    except Exception as exc:
-        print(f"{symbol}: error — {exc}", file=sys.stderr)
-        return symbol, []
+    except (OSError, ValueError, KeyError, pd.errors.ParserError) as exc:
+        return symbol, [], f"load: {_fmt_exc(exc)}"
 
     rows: list[dict] = []
     min_bars = LOOKBACK // 2 + 15
@@ -293,21 +320,22 @@ def _backfill_ticker_worker(path: str) -> tuple[str, list[dict]]:
             )
             if setup:
                 rows.append(setup)
-    except Exception as exc:
-        print(f"{symbol}: error — {exc}", file=sys.stderr)
-        return symbol, []
+    except Exception as exc:  # noqa: BLE001 - worker boundary; returned to parent and logged
+        return symbol, [], f"scan: {_fmt_exc(exc)}"
 
-    return symbol, rows
+    return symbol, rows, None
 
 
 def _backtest_ticker_worker(
     path: str,
     entry_valid: int,
     max_hold: int,
-) -> tuple[str, list[dict], dict]:
-    """Process-pool worker: load ticker OHLC locally and run walk-forward backtest."""
+) -> tuple[str, list[dict], dict, Optional[str]]:
+    """Process-pool worker: load ticker OHLC locally and run walk-forward backtest.
+
+    Returns ``(symbol, trades, counts, error)``; ``error`` is None on success.
+    """
     symbol = ticker_from_filename(path)
-    empty_counts: dict = {}
     try:
         trades, counts = backtest_ticker(
             path,
@@ -315,10 +343,9 @@ def _backtest_ticker_worker(
             max_hold,
             benchmark_df=_WORKER_BENCHMARK_DF,
         )
-        return symbol, trades, counts
-    except Exception as exc:
-        print(f"{symbol}: error — {exc}", file=sys.stderr)
-        return symbol, [], empty_counts
+        return symbol, trades, counts, None
+    except Exception as exc:  # noqa: BLE001 - worker boundary; returned to parent and logged
+        return symbol, [], {}, _fmt_exc(exc)
 
 
 def run_backtest(
@@ -355,6 +382,7 @@ def run_backtest(
     print(f"Workers: {max_workers}  Tickers: {len(work_paths)}\n")
 
     results_by_path: dict[str, tuple[list[dict], dict]] = {}
+    failures: list[dict] = []
     with ProcessPoolExecutor(
         max_workers=max_workers,
         initializer=_init_cobra_worker,
@@ -368,10 +396,12 @@ def run_backtest(
             path = futures[fut]
             symbol = ticker_from_filename(path)
             try:
-                symbol, trades, counts = fut.result()
-            except Exception as exc:
-                print(f"{symbol}: error — {exc}", file=sys.stderr)
-                trades, counts = [], {}
+                symbol, trades, counts, error = fut.result()
+            except Exception as exc:  # noqa: BLE001 - process crash / pickling boundary
+                trades, counts, error = [], {}, f"worker: {_fmt_exc(exc)}"
+            if error:
+                print(f"{symbol}: error — {error}", file=sys.stderr)
+                failures.append({"Symbol": symbol, "Error": error})
             results_by_path[path] = (trades, counts)
             if trades:
                 filled = sum(1 for t in trades if t["Outcome"] != "no_fill")
@@ -390,6 +420,13 @@ def run_backtest(
     os.makedirs(logs_dir, exist_ok=True)
     trades_df.to_csv(out_path, index=False)
     print(f"Saved backtest output: {out_path}")
+
+    print("Outcome counts: " + ", ".join(f"{k}={v}" for k, v in sorted(all_counts.items())))
+    if all_counts.get("errors"):
+        print(f"⚠️ {all_counts['errors']} signal(s) skipped due to level/simulation errors.")
+    err_path = _write_failures(logs_dir, "backtest", failures)
+    if err_path:
+        print(f"⚠️ {len(failures)} ticker(s) failed entirely; details: {err_path}")
 
     return trades_df
 
