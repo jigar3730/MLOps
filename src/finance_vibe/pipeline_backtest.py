@@ -120,6 +120,89 @@ def simulate_trade(
     return "expired", df.iloc[last_idx]["Date"], exit_price, r_mult
 
 
+def simulate_trade_gap_aware(
+    df: pd.DataFrame,
+    start_idx: int,
+    is_long: bool,
+    entry: float,
+    stop: float,
+    target1: float,
+    target2: float,
+    entry_valid_bars: int,
+    max_hold_bars: int,
+    *,
+    slippage_pct: float = 0.0,
+) -> tuple[str, Optional[pd.Timestamp], Optional[float], Optional[float], Optional[int]]:
+    """Full-exit simulator with realistic fills (same exit rules as :func:`simulate_trade`).
+
+    Differences from the legacy simulator:
+      * Limit entry fills at the open when the bar gaps through the entry.
+      * Stops fill at the open when the bar gaps through the stop (worse fill),
+        and never better than the entry fill on the fill bar.
+      * Targets fill at the open when the bar gaps beyond them.
+      * No target exit on the fill bar: the bar's favourable extreme may have
+        printed before the entry filled (pessimistic intrabar ordering).
+      * ``slippage_pct`` worsens entry and stop fills.
+
+    R multiples are measured from the actual fill using the *planned* risk
+    (|entry - stop|). Returns ``(outcome, exit_date, exit_price, r_mult, exit_idx)``.
+    """
+    risk = abs(entry - stop)
+    if risk <= 0:
+        return "no_fill", None, None, None, None
+
+    has_open = "Open" in df.columns
+    n = len(df)
+    fill_idx = fill_price = None
+    for j in range(start_idx, min(start_idx + entry_valid_bars, n)):
+        bar = df.iloc[j]
+        o = float(bar["Open"]) if has_open and pd.notna(bar["Open"]) else None
+        if is_long and float(bar["Low"]) <= entry:
+            fill_price = o if (o is not None and o <= entry) else entry
+            fill_idx = j
+            break
+        if not is_long and float(bar["High"]) >= entry:
+            fill_price = o if (o is not None and o >= entry) else entry
+            fill_idx = j
+            break
+    if fill_idx is None:
+        return "no_fill", None, None, None, None
+
+    fill_price = fill_price * (1 + slippage_pct) if is_long else fill_price * (1 - slippage_pct)
+
+    def r_of(px: float) -> float:
+        return (px - fill_price) / risk if is_long else (fill_price - px) / risk
+
+    for k in range(fill_idx, min(fill_idx + max_hold_bars, n)):
+        bar = df.iloc[k]
+        hi, lo = float(bar["High"]), float(bar["Low"])
+        o = float(bar["Open"]) if has_open and pd.notna(bar["Open"]) else None
+        on_fill_bar = k == fill_idx
+
+        stop_hit = lo <= stop if is_long else hi >= stop
+        if stop_hit:
+            if on_fill_bar:
+                # Bought at fill_price during this bar; can't exit better than that.
+                px = min(stop, fill_price) if is_long else max(stop, fill_price)
+                px = px * (1 - slippage_pct) if is_long else px * (1 + slippage_pct)
+            else:
+                px = _stop_exit_price(is_long, stop, o, slippage_pct)
+            return "stopped", bar["Date"], px, r_of(px), k
+
+        if on_fill_bar:
+            continue
+        if (hi >= target2) if is_long else (lo <= target2):
+            px = _target_exit_price(is_long, target2, o)
+            return "target2", bar["Date"], px, r_of(px), k
+        if (hi >= target1) if is_long else (lo <= target1):
+            px = _target_exit_price(is_long, target1, o)
+            return "target1", bar["Date"], px, r_of(px), k
+
+    last_idx = min(fill_idx + max_hold_bars - 1, n - 1)
+    exit_price = float(df.iloc[last_idx]["Close"])
+    return "expired", df.iloc[last_idx]["Date"], exit_price, r_of(exit_price), last_idx
+
+
 # =====================================================================
 # UPDATED SIMULATOR (No Partials, Full 2.0R Target, High-Water ATR Trail)
 # =====================================================================

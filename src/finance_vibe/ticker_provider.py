@@ -45,6 +45,23 @@ def load_manifest(path: str = None) -> list[str]:
     return _normalize_symbols(values.tolist())
 
 
+def save_universe(symbols: list[str], today: str = None) -> str:
+    """Write the active universe and a dated, immutable copy for reproducible backtests.
+
+    ``data/active_tickers.csv`` is overwritten every run; the copy at
+    ``data/universes/active_tickers_<date>.csv`` lets a later backtest use
+    exactly the universe a past run used (``--universe <that file>``).
+    """
+    series = pd.Series(symbols, name="Ticker")
+    series.to_csv(config.TICKER_LIST_PATH, index=False)
+    stamp = today or pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d")
+    uni_dir = os.path.join(os.path.dirname(config.TICKER_LIST_PATH), "universes")
+    os.makedirs(uni_dir, exist_ok=True)
+    dated = os.path.join(uni_dir, f"active_tickers_{stamp}.csv")
+    series.to_csv(dated, index=False)
+    return dated
+
+
 def refresh_active_tickers():
     print("--- STEP 1: Discovering Tickers (Manifest + Active) ---")
     cap = int(getattr(config, "ACTIVE_TICKER_CAP", 1000))
@@ -102,13 +119,12 @@ def refresh_active_tickers():
         if len(final_list) > cap:
             final_list = final_list[:cap]
 
-        # 5. Save using config path
-        pd.Series(final_list, name='Ticker').to_csv(
-            config.TICKER_LIST_PATH, index=False)
+        # 5. Save using config path (+ dated snapshot)
+        dated = save_universe(final_list)
 
         print(
             f"✅ Success! Saved {len(final_list)} total tickers "
-            f"(cap={cap}) to {config.TICKER_LIST_PATH}"
+            f"(cap={cap}) to {config.TICKER_LIST_PATH} (snapshot: {dated})"
         )
 
     except Exception as e:  # noqa: BLE001 - network screener boundary; falls back to static list
@@ -116,8 +132,7 @@ def refresh_active_tickers():
         # Still persist the priority baseline so the pipeline is not blocked.
         if static_tickers:
             fallback = static_tickers[:cap]
-            pd.Series(fallback, name='Ticker').to_csv(
-                config.TICKER_LIST_PATH, index=False)
+            save_universe(fallback)
             print(
                 f"⚠️ Fell back to {len(fallback)} static tickers "
                 f"at {config.TICKER_LIST_PATH}"
